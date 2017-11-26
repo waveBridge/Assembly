@@ -12,6 +12,9 @@ DATA SEGMENT
 	PROMPT2 DB 0DH, 0AH, 'Read File Error. $'
 	PROMPT3 DB 0DH, 0AH, 'Close File Error. $'
 	FLAG	DB 1										;文件读取结束的标记
+	MAXLEN	DW 0										;处理后最长文件的的长度
+	TMPLEN  DW 0 										;文件比较后的长度
+	MATRIX 	DB 100000000 DUP ( )                        ;相似度比较使用的矩阵
 DATA ENDS
 
 STACK SEGMENT
@@ -23,6 +26,7 @@ CODE SEGMENT
 START:	MOV AX, DATA
 		MOV DS, AX 										;装载DS
 		
+;***选择哪一个文件做操作***
 WHICH:	CMP FLAG, 1
 		JNE	TWO0
 ONE0:	LEA DX, FILENAME1								;文件1的操作
@@ -34,7 +38,7 @@ ONE0:	LEA DX, FILENAME1								;文件1的操作
 		
 		LEA SI, FILE1									;SI存指向FILE1的指针
 		XOR DI, DI 										;放临时文件字符串长度
-		JMP AGAIN
+		JMP INIT
 		
 TWO0:	LEA DX, FILENAME2								;文件2的操作
 		MOV AH, 3DH
@@ -46,8 +50,8 @@ TWO0:	LEA DX, FILENAME2								;文件2的操作
 		LEA SI, FILE2									;SI存指向FILE1的指针
 		XOR DI, DI 										;放临时文件字符串长度
 		
-		;开始读文件
-AGAIN:  LEA DX, DTA										;DS: DX指向缓冲区
+;***开始读文件，预处理并放入内存***
+INIT:  LEA DX, DTA										;DS: DX指向缓冲区
 		CMP FLAG, 1
 		JNE TWO1
 ONE1:	MOV BX, HANDLE1 								;BX=文件代号
@@ -60,9 +64,9 @@ READ:	MOV CX, 1 										;CX=读取字节数
 		JC ERR2 										;读错,转ERR2
 		
 		CMP AX, 0 										;读出字节数为0
-		JE CLOSE 										;读出字节数为0,转CLOSE
+		JE 	CLOSE 										;读出字节数为0,转CLOSE
 		CMP DTA, 1AH 									;读出内容是EOF
-		JE CLOSE 										;读出内容是EOF,转CLOSE
+		JE 	CLOSE 										;读出内容是EOF,转CLOSE
 		
 		;把这个字节内容存放到内存中
 		MOV DL, DTA
@@ -86,42 +90,60 @@ NOCHAR:	MOV [SI], DL									;放入FILE1内存中
 		MOV AH, 2
 		INT 21H
 		
-CHAR:	JMP AGAIN
+CHAR:	JMP INIT
 		
-		;错误
+;***错误***
 ERR1:   LEA DX, PROMPT1
 		CALL DISP 										;显示"文件打开错误"
 		JMP EXIT
-		
+
 ERR2: 	LEA DX, PROMPT2
 		CALL DISP 										;显示"文件读错误"
-									
+		JMP EXIT
+
+ERR3: 	LEA DX, PROMPT3
+		CALL DISP 										;显示"文件关闭错误"
+		JMP EXIT
+
+;***读文件完毕，关闭文件，求长度***								
 CLOSE:	CMP FLAG, 1
 		JNE TWO2
-ONE2:	MOV FILE1L, DI 
+ONE2:	MOV FILE1L, DI 									;文件1的长度存到FILE1L
 		MOV AH, 3EH
 		MOV BX, HANDLE1
 		JMP CLOSE2
 
-TWO2:	MOV FILE2L, DI 
+TWO2:	MOV FILE2L, DI 									;文件2的长度存到FILE2L
 		MOV AH, 3EH
 		MOV BX, HANDLE2
 
 CLOSE2:	INT 21H 										;关闭文件
-		JC ERR3
+		JC  ERR3
 		
 		CMP FLAG, 1
-		JNE EXIT	
+		JNE MAXL	
 		MOV FLAG, 0										;FALG标记清零，读取第二个文件
 		JMP WHICH										
-		
+
+;***求处理后文件的最大长度***
+MAXL:	CMP FILE1L, FILE2L
+		JB 	BIGL
+		MOV AX, FILE1L
+		MOV MAXLEN, AX
+		JMP SAME 
+
+BIGL:	MOV AX, FILE2L
+		MOV MAXLEN, AX
+
+;***相似度计算***
+SAME:		
+
+
+;***退出***
 EXIT: 	MOV AH, 4CH										;返回DOS
 		INT 21H 
-		
-ERR3: 	LEA DX, PROMPT3
-		CALL DISP 										;显示"文件关闭错误"
-		JMP EXIT
-		
+				
+;***显示语句***
 DISP:	MOV AH, 09H
 		INT 21H
 		RET
