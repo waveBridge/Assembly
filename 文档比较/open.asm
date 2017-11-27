@@ -4,17 +4,17 @@ DATA SEGMENT
 	HANDLE1 DW 0 										;文件1的代号
 	HANDLE2 DW 0										;文件2的代号
 	DTA 	DB 5 DUP ( ) 								;磁盘缓冲区
-	FILE1 	DB 16384 DUP ( )                            ;文件1转化为字符串
+	FILE1 	DB 13000 DUP ( )                            ;文件1转化为字符串
 	FILE1L 	DW 0        		      					;文件1字符串长度
-	FILE2 	DB 16384 DUP ( )							;文件2转化为字符串
+	FILE2 	DB 13000 DUP ( )							;文件2转化为字符串
 	FILE2L	DW 0 										;文件2字符串长度
 	PROMPT1 DB 0DH, 0AH, 'Open File Error. $'
 	PROMPT2 DB 0DH, 0AH, 'Read File Error. $'
 	PROMPT3 DB 0DH, 0AH, 'Close File Error. $'
 	FLAG	DB 1										;文件读取结束的标记
 	MAXLEN	DW 0										;处理后最长文件的的长度
-	TMPLEN  DW 0 										;文件比较后的长度
-	MATRIX 	DB 100000000 DUP ( )                        ;相似度比较使用的矩阵
+	TMPLEN  DB 0 										;文件比较后的长度
+	MATRIX 	DB 39000 DUP (0)                            ;相似度比较使用的矩阵（用到了状态压缩,n+1行压缩为3行）
 DATA ENDS
 
 STACK SEGMENT
@@ -51,7 +51,7 @@ TWO0:	LEA DX, FILENAME2								;文件2的操作
 		XOR DI, DI 										;放临时文件字符串长度
 		
 ;***开始读文件，预处理并放入内存***
-INIT:  LEA DX, DTA										;DS: DX指向缓冲区
+INIT:   LEA DX, DTA										;DS: DX指向缓冲区
 		CMP FLAG, 1
 		JNE TWO1
 ONE1:	MOV BX, HANDLE1 								;BX=文件代号
@@ -126,7 +126,9 @@ CLOSE2:	INT 21H 										;关闭文件
 		JMP WHICH										
 
 ;***求处理后文件的最大长度***
-MAXL:	CMP FILE1L, FILE2L
+MAXL:	MOV BX, FILE1L
+		MOV CX, FILE2L 
+		CMP BX, CX
 		JB 	BIGL
 		MOV AX, FILE1L
 		MOV MAXLEN, AX
@@ -136,8 +138,156 @@ BIGL:	MOV AX, FILE2L
 		MOV MAXLEN, AX
 
 ;***相似度计算***
-SAME:		
+SAME:	MOV SI, 1 										;文件1的指针
+		MOV DI, 1 										;文件2的指针
+		
+FOR1:	CMP SI, 1
+		JE  FLINE 										;第一特行殊处理
+		
+		MOV AX, SI 										;做除法，根据余数确定实际空间行号
+		MOV DL, 2
+		DIV DL
+		CMP AH, 0 										
+		JZ 	EVENN
 
+		;寄存器的值对应的意义：AH->left(左边的行号)	AL->up(上边的行号)	DH->leftUp(左上方的行号)	DL->ii(当前行号)
+ODDN:	MOV AH, 1										;奇数行，对应到实际空间为第1行
+		MOV DH, 2
+		MOV AL, 2
+		MOV DL, 1
+		JMP DP 
+
+EVENN:	MOV AH, 2										;偶数行，对应到实际空间为第2行
+		MOV DH, 1
+		MOV AL, 1
+		MOV DL, 2	
+		JMP DP
+		
+FLINE:	MOV AH, 1
+		MOV DH, 0
+		MOV AL, 0
+		MOV DL, 1
+		
+DP:		LEA BX, FILE1
+		DEC BX
+		MOV CH, [BX + SI] 								;BX减了一下，实际为[BX + SI - 1]
+		LEA BX, FILE2
+		DEC BX
+		MOV CL, [BX + DI]								;BX减了一下，实际为[BX + DI - 1]
+		
+		CMP CH, CL
+		JE	LEFTUP
+		
+		;当前字符不等，那么为左边或者上边
+		;算左边
+		PUSH DX
+		PUSH AX 
+		MOV CL, 4
+		SHR AX, CL										;AX逻辑右移4位，使得AX是AH(左边的行号)
+		MOV CX, FILE2L
+		INC CX 											;每一行的长度是文件2的长度+1
+		MUL CX 
+		MOV BX, AX
+		
+		DEC BX
+		MOV DH, MATRIX[BX + DI]  						;BX减了一下，实际为[BX + DI - 1] 左方数据
+		
+		;算上边
+		POP AX
+		PUSH DX
+		XOR AH, AH										;AX高四位置零，使得AX为AL(上方行号)
+		MUL CX
+		MOV BX, AX
+		POP DX
+		MOV DL, MATRIX[BX + DI]							;上方数据
+		JMP NOFOR										;跳转接力，不要管for2
+
+FOR2:	JMP FOR1	
+		
+NOFOR:	CMP DH, DL
+		JB MAXN
+		MOV CL, DH 										;左边更大
+		JMP THEMAX 
+		
+MAXN:	MOV CL, DL										;上边更大
+		
+		;当前位置放入更大的数
+THEMAX:	POP DX
+		XOR CH, CH
+		PUSH CX
+		XOR DH, DH										;取得当前行
+		MOV AX, DX
+		MOV CX, FILE2L
+		INC CX
+		MUL CX 
+		MOV BX, AX
+		POP CX
+		MOV MATRIX[BX + DI], CL
+		JMP NEXT
+		
+		;左上方
+LEFTUP:	PUSH AX 										;当前字符相等，那么值为左上角加1
+		PUSH DX
+		MOV CL, 4										
+		SHR DX, CL										;DX逻辑右移4位，使得DX位原先的DH值
+		MOV AX, DX 										
+		MOV CX, FILE2L    				
+		INC CX											;一行的个数是文件2的长度+1
+		MUL CX 											;AX中的行号乘以CX中的每行的元素个数 结果在AX中
+		MOV BX, AX										;结果存入基址寄存器BX
+		
+		DEC BX 
+		MOV AL, MATRIX[BX + DI]                         ;BX减了，实际为[BX + DI - 1]
+		INC AL											;此时AL是matrix[leftUp][j - 1] + 1
+
+		POP DX
+		PUSH DX
+		XOR DH, DH 										;DX高4位置零，使得结果为DL，当前行号
+		MOV AX, DX
+		MUL CX											
+		MOV BX, AX										;计算的是当前行对应的结果
+		
+		MOV MATRIX[BX + DI], AL							;最后当前行当前列等于左上方的值
+		POP DX
+		POP AX	
+		JMP NEXT
+		
+NEXT:	INC DI 
+		MOV AX, FILE2L
+		CMP DI, AX
+		JBE FOR2
+		MOV DI, 1
+		INC SI 
+		MOV AX, FILE1L
+		CMP SI, AX
+		JBE FOR2
+		
+		;得到答案
+		MOV AX, FILE1L									;求最后的长度
+		MOV BL, 2
+		DIV BL
+		CMP AH, 0
+		JE  EVEANS
+
+ODDANS: MOV SI, 1 										;奇数行
+		JMP ANS
+EVEANS: MOV SI, 2										;偶数行
+		
+ANS:	MOV DI, FILE2L
+		
+		MOV AX, SI
+		MOV CX, FILE2L
+		INC CX
+		MUL CX 
+		MOV BX, AX
+		MOV AL, MATRIX[BX + DI]
+		MOV TMPLEN, AL
+		
+		MOV DL, 30H
+		MOV AH, 02H
+		INT 21H
+		JMP EXIT
+		
 
 ;***退出***
 EXIT: 	MOV AH, 4CH										;返回DOS
