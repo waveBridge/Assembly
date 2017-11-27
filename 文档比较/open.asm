@@ -4,17 +4,17 @@ DATA SEGMENT
 	HANDLE1 DW 0 										;文件1的代号
 	HANDLE2 DW 0										;文件2的代号
 	DTA 	DB 5 DUP ( ) 								;磁盘缓冲区
-	FILE1 	DB 13000 DUP ( )                            ;文件1转化为字符串
+	FILE1 	DB 8000 DUP ( )                             ;文件1转化为字符串
 	FILE1L 	DW 0        		      					;文件1字符串长度
-	FILE2 	DB 13000 DUP ( )							;文件2转化为字符串
+	FILE2 	DB 8000 DUP ( )								;文件2转化为字符串
 	FILE2L	DW 0 										;文件2字符串长度
 	PROMPT1 DB 0DH, 0AH, 'Open File Error. $'
 	PROMPT2 DB 0DH, 0AH, 'Read File Error. $'
 	PROMPT3 DB 0DH, 0AH, 'Close File Error. $'
 	FLAG	DB 1										;文件读取结束的标记
 	MAXLEN	DW 0										;处理后最长文件的的长度
-	TMPLEN  DB 0 										;文件比较后的长度
-	MATRIX 	DB 39000 DUP (0)                            ;相似度比较使用的矩阵（用到了状态压缩,n+1行压缩为3行）
+	TMPLEN  DW 0 										;文件比较后的长度
+	MATRIX 	DW 24001 DUP (0)                            ;相似度比较使用的矩阵（用到了状态压缩,m+1行压缩为3行）
 DATA ENDS
 
 STACK SEGMENT
@@ -83,15 +83,7 @@ READ:	MOV CX, 1 										;CX=读取字节数
 		CMP DL, 7AH										
 		JBE NOCHAR 										;大于等于‘a’，小于等于'z'
 		JMP CHAR
-		
-NOCHAR:	MOV [SI], DL									;放入FILE1内存中
-		INC SI											;SI指针++
-		INC DI											;长度++
-		MOV AH, 2
-		INT 21H
-		
-CHAR:	JMP INIT
-		
+
 ;***错误***
 ERR1:   LEA DX, PROMPT1
 		CALL DISP 										;显示"文件打开错误"
@@ -104,6 +96,17 @@ ERR2: 	LEA DX, PROMPT2
 ERR3: 	LEA DX, PROMPT3
 		CALL DISP 										;显示"文件关闭错误"
 		JMP EXIT
+		
+NOCHAR:	MOV [SI], DL									;放入FILE1内存中
+		INC SI											;SI指针++
+		INC DI											;长度++
+		CMP DI, 8000								
+		JAE CLOSE
+		MOV AH, 2
+		INT 21H
+		
+CHAR:	JMP INIT
+		
 
 ;***读文件完毕，关闭文件，求长度***								
 CLOSE:	CMP FLAG, 1
@@ -128,14 +131,15 @@ CLOSE2:	INT 21H 										;关闭文件
 ;***求处理后文件的最大长度***
 MAXL:	MOV BX, FILE1L
 		MOV CX, FILE2L 
-		CMP BX, CX
-		JB 	BIGL
-		MOV AX, FILE1L
-		MOV MAXLEN, AX
-		JMP SAME 
+		CMP BX, CX		
+		JBE BIGL
+		MOV DX, FILE1L
+		MOV MAXLEN, DX
+		JMP SAME
 
-BIGL:	MOV AX, FILE2L
-		MOV MAXLEN, AX
+BIGL:	MOV DX, FILE2L
+		MOV MAXLEN, DX
+		
 
 ;***相似度计算***
 SAME:	MOV SI, 1 										;文件1的指针
@@ -160,7 +164,7 @@ ODDN:	MOV AH, 1										;奇数行，对应到实际空间为第1行
 EVENN:	MOV AH, 2										;偶数行，对应到实际空间为第2行
 		MOV DH, 1
 		MOV AL, 1
-		MOV DL, 2	
+		MOV DL, 2
 		JMP DP
 		
 FLINE:	MOV AH, 1
@@ -170,7 +174,7 @@ FLINE:	MOV AH, 1
 		
 DP:		LEA BX, FILE1
 		DEC BX
-		MOV CH, [BX + SI] 								;BX减了一下，实际为[BX + SI - 1]
+		MOV CH, [BX + SI] 							;BX减了一下，实际为[BX + SI - 1]
 		LEA BX, FILE2
 		DEC BX
 		MOV CL, [BX + DI]								;BX减了一下，实际为[BX + DI - 1]
@@ -189,31 +193,32 @@ DP:		LEA BX, FILE1
 		MUL CX 
 		MOV BX, AX
 		
+		ADD BX, DI
 		DEC BX
-		MOV DH, MATRIX[BX + DI]  						;BX减了一下，实际为[BX + DI - 1] 左方数据
+		ADD BX, BX
+		MOV DX, MATRIX[BX]   	 						;BX减了一下，实际为[(BX + DI - 1)*2],左方数据
 		
 		;算上边
 		POP AX
-		PUSH DX
+		PUSH DX											;存入左方数据
 		XOR AH, AH										;AX高四位置零，使得AX为AL(上方行号)
 		MUL CX
 		MOV BX, AX
-		POP DX
-		MOV DL, MATRIX[BX + DI]							;上方数据
-		JMP NOFOR										;跳转接力，不要管for2
+		ADD BX, DI
+		ADD BX, BX
+		MOV CX, MATRIX[BX]								;上方数据([(BX + DI)*2])
+		POP DX											;取出左方数据
 
-FOR2:	JMP FOR1	
-		
-NOFOR:	CMP DH, DL
-		JB MAXN
-		MOV CL, DH 										;左边更大
+		CMP DX, CX
+		JA MAXN
 		JMP THEMAX 
 		
-MAXN:	MOV CL, DL										;上边更大
+FOR2:	JMP FOR1
+		
+MAXN:	MOV CX, DX										;上边更大
 		
 		;当前位置放入更大的数
 THEMAX:	POP DX
-		XOR CH, CH
 		PUSH CX
 		XOR DH, DH										;取得当前行
 		MOV AX, DX
@@ -221,35 +226,73 @@ THEMAX:	POP DX
 		INC CX
 		MUL CX 
 		MOV BX, AX
+		ADD BX, DI
+		ADD BX, BX
 		POP CX
-		MOV MATRIX[BX + DI], CL
+		MOV MATRIX[BX], CX 
 		JMP NEXT
 		
 		;左上方
-LEFTUP:	PUSH AX 										;当前字符相等，那么值为左上角加1
+LEFTUP:	PUSH DX
+;;;;;;;;;;;卧槽这么玄学的吗？？？！！！位移就不行
+		PUSH AX
 		PUSH DX
+		MOV AH, 02H
+		MOV DL, DH
+		ADD DL, 30H
+		INT 21H
+		POP DX
+		POP AX
+;;;;;;;;;;		
 		MOV CL, 4										
 		SHR DX, CL										;DX逻辑右移4位，使得DX位原先的DH值
+;;;;;;;;;		
+		;PUSH AX
+		;PUSH DX
+		;MOV AH, 02H
+		;ADD DL, 30H
+		;INT 21H
+		;POP DX
+		;POP AX
+;;;;;;;;;;;		
 		MOV AX, DX 										
 		MOV CX, FILE2L    				
 		INC CX											;一行的个数是文件2的长度+1
 		MUL CX 											;AX中的行号乘以CX中的每行的元素个数 结果在AX中
 		MOV BX, AX										;结果存入基址寄存器BX
-		
+		ADD BX, DI
 		DEC BX 
-		MOV AL, MATRIX[BX + DI]                         ;BX减了，实际为[BX + DI - 1]
-		INC AL											;此时AL是matrix[leftUp][j - 1] + 1
-
+		ADD BX, BX
+		MOV CX, MATRIX[BX]                    		    ;BX减了，实际为[(BX + DI - 1)*2]
+		INC CX											;此时CX是matrix[leftUp][j - 1] + 1
+		
+		MOV AH, 02H
+		MOV DX, CX 
+		INT 21H
+		;MOV DX, BX
+		;INT 21H
+		;MOV DL, 16
+		;INT 21H
+		
 		POP DX
-		PUSH DX
+		PUSH CX
 		XOR DH, DH 										;DX高4位置零，使得结果为DL，当前行号
 		MOV AX, DX
-		MUL CX											
+		MOV CX, FILE2L    				
+		INC CX											;一行的个数是文件2的长度+1
+		MUL CX 											;AX中的行号乘以CX中的每行的元素个数 结果在AX中										
 		MOV BX, AX										;计算的是当前行对应的结果
+		ADD BX, DI
+		ADD BX, BX
+		POP CX
+		MOV MATRIX[BX], CX
 		
-		MOV MATRIX[BX + DI], AL							;最后当前行当前列等于左上方的值
-		POP DX
-		POP AX	
+		;MOV AH, 02H
+		;MOV DX, BX
+		;INT 21H
+		;MOV DL, 30
+		;INT 21H
+		
 		JMP NEXT
 		
 NEXT:	INC DI 
@@ -272,19 +315,23 @@ NEXT:	INC DI
 ODDANS: MOV SI, 1 										;奇数行
 		JMP ANS
 EVEANS: MOV SI, 2										;偶数行
-		
+
 ANS:	MOV DI, FILE2L
-		
 		MOV AX, SI
 		MOV CX, FILE2L
 		INC CX
 		MUL CX 
 		MOV BX, AX
-		MOV AL, MATRIX[BX + DI]
-		MOV TMPLEN, AL
+		ADD BX, DI
+		ADD BX, BX
+		MOV AX, MATRIX[BX]
+		MOV TMPLEN, AX
 		
-		MOV DL, 30H
 		MOV AH, 02H
+		;MOV DL, AL
+		;INT 21H
+		
+		MOV DL, 39H
 		INT 21H
 		JMP EXIT
 		
