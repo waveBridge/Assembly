@@ -148,10 +148,11 @@ SAME:	MOV SI, 1 										;文件1的指针
 FOR1:	CMP SI, 1
 		JE  FLINE 										;第一特行殊处理
 		
+		XOR DX, DX
 		MOV AX, SI 										;做除法，根据余数确定实际空间行号
-		MOV DL, 2
-		DIV DL
-		CMP AH, 0 										
+		MOV BX, 2
+		DIV BX
+		CMP DX, 0 										
 		JZ 	EVENN
 
 		;寄存器的值对应的意义：AH->left(左边的行号)	AL->up(上边的行号)	DH->leftUp(左上方的行号)	DL->ii(当前行号)
@@ -186,8 +187,10 @@ DP:		LEA BX, FILE1
 		;算左边
 		PUSH DX
 		PUSH AX 
-		MOV CL, 4
-		SHR AX, CL										;AX逻辑右移4位，使得AX是AH(左边的行号)
+		;MOV CL, 4
+		;SHR AX, CL										;AX逻辑右移4位，使得AX是AH(左边的行号)
+		MOV AL, AH
+		XOR AH, AH
 		MOV CX, FILE2L
 		INC CX 											;每一行的长度是文件2的长度+1
 		MUL CX 
@@ -234,27 +237,9 @@ THEMAX:	POP DX
 		
 		;左上方
 LEFTUP:	PUSH DX
-;;;;;;;;;;;卧槽这么玄学的吗？？？！！！位移就不行
-		PUSH AX
-		PUSH DX
-		MOV AH, 02H
-		MOV DL, DH
-		ADD DL, 30H
-		INT 21H
-		POP DX
-		POP AX
-;;;;;;;;;;		
-		MOV CL, 4										
-		SHR DX, CL										;DX逻辑右移4位，使得DX位原先的DH值
-;;;;;;;;;		
-		;PUSH AX
-		;PUSH DX
-		;MOV AH, 02H
-		;ADD DL, 30H
-		;INT 21H
-		;POP DX
-		;POP AX
-;;;;;;;;;;;		
+
+		MOV DL, DH					
+		XOR DH, DH										;使得DX为DH
 		MOV AX, DX 										
 		MOV CX, FILE2L    				
 		INC CX											;一行的个数是文件2的长度+1
@@ -265,14 +250,6 @@ LEFTUP:	PUSH DX
 		ADD BX, BX
 		MOV CX, MATRIX[BX]                    		    ;BX减了，实际为[(BX + DI - 1)*2]
 		INC CX											;此时CX是matrix[leftUp][j - 1] + 1
-		
-		MOV AH, 02H
-		MOV DX, CX 
-		INT 21H
-		;MOV DX, BX
-		;INT 21H
-		;MOV DL, 16
-		;INT 21H
 		
 		POP DX
 		PUSH CX
@@ -287,12 +264,6 @@ LEFTUP:	PUSH DX
 		POP CX
 		MOV MATRIX[BX], CX
 		
-		;MOV AH, 02H
-		;MOV DX, BX
-		;INT 21H
-		;MOV DL, 30
-		;INT 21H
-		
 		JMP NEXT
 		
 NEXT:	INC DI 
@@ -305,17 +276,19 @@ NEXT:	INC DI
 		CMP SI, AX
 		JBE FOR2
 		
-		;得到答案
-		MOV AX, FILE1L									;求最后的长度
-		MOV BL, 2
-		DIV BL
-		CMP AH, 0
+		;求结果存放的行号(1或者2)
+		XOR DX, DX
+		MOV AX, FILE1L								
+		MOV BX, 2
+		DIV BX
+		CMP DX, 0
 		JE  EVEANS
 
 ODDANS: MOV SI, 1 										;奇数行
 		JMP ANS
 EVEANS: MOV SI, 2										;偶数行
-
+		
+		;得到答案
 ANS:	MOV DI, FILE2L
 		MOV AX, SI
 		MOV CX, FILE2L
@@ -327,14 +300,51 @@ ANS:	MOV DI, FILE2L
 		MOV AX, MATRIX[BX]
 		MOV TMPLEN, AX
 		
-		MOV AH, 02H
+		;MOV AH, 02H
 		;MOV DL, AL
+		;ADD DL, 30H
 		;INT 21H
+
+;***求百分比***
+PERC:	XOR DX, DX
+		MOV AX, TMPLEN							
+		MOV CX, 100
+		MUL CX											;相同长度先乘100,再除以最大长度
 		
-		MOV DL, 39H
+		MOV CX, MAXLEN
+		DIV CX											;此时百分比在AX中 最大为100，所以结果其实在AL中
+
+		CMP AX, 100
+		JE HUND
+
+		MOV BL, 10										;除以10，得到十位和个位
+		DIV BL
+		
+		CMP AL, 0	
+		JE	NOTEN
+		PUSH AX
+		MOV AH, 02H
+		MOV DL, AL
+		ADD DL, 30H
 		INT 21H
-		JMP EXIT
-		
+		POP AX
+
+NOTEN: 	MOV DL, AH										;小于10，只打印个位
+		MOV AH, 02H
+		ADD DL, 30H
+		INT 21H																
+		JMP OVER
+											
+HUND:	MOV AH, 02H										;百分之百，特殊处理直接打印100
+		MOV DL, 31H
+		INT 21H
+		MOV DL, 30H
+		INT 21H
+		MOV DL, 30H
+		INT 21H
+
+OVER:	MOV DL, 37										;打印%
+		INT 21H
 
 ;***退出***
 EXIT: 	MOV AH, 4CH										;返回DOS
