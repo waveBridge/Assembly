@@ -1,9 +1,9 @@
 DATA SEGMENT
-	FILENAME1 DB 'D:\1.asm',0                           ;文件1的位置
-	FILENAME2 DB 'D:\2.asm',0                           ;文件2的位置
+	FILENAME1 DB 20 DUP (0), 0, '$'                     ;文件1的位置
+	FILENAME2 DB 20 DUP (0), 0, '$'                     ;文件2的位置
 	HANDLE1 DW 0 										;文件1的代号
 	HANDLE2 DW 0										;文件2的代号
-	DTA 	DB 5 DUP ( ) 								;磁盘缓冲区
+	DTA 	DB 100 DUP (0) 								;磁盘缓冲区
 	FILE1 	DB 8000 DUP ( )                             ;文件1转化为字符串
 	FILE1L 	DW 0        		      					;文件1字符串长度
 	FILE2 	DB 8000 DUP ( )								;文件2转化为字符串
@@ -11,11 +11,21 @@ DATA SEGMENT
 	PROMPT1 DB 0DH, 0AH, 'Open File Error. $'
 	PROMPT2 DB 0DH, 0AH, 'Read File Error. $'
 	PROMPT3 DB 0DH, 0AH, 'Close File Error. $'
+	PROMPT4 DB 0DH, 0AH, 'Open Dir Error. $'
+	PROMPT5 DB 0DH, 0AH, 'Read Dir Error. $'
 	WAIT1	DB 0DH, 0AH, 'Please Wait... $'
+	DONE1   DB 0DH, 0AH, 'Finish! $'
 	FLAG	DB 1										;文件读取结束的标记
 	MAXLEN	DW 0										;处理后最长文件的的长度
 	TMPLEN  DW 0 										;文件比较后的长度
 	MATRIX 	DW 24001 DUP (0)                            ;相似度比较使用的矩阵（用到了状态压缩,m+1行压缩为3行）
+	DIR		DB 'D:\CODE', 0								;目录地址
+	FIL     DB '*.asm', 0								;文件匹配
+	FILENUM	DB 0										;文件数量
+	FILESET DB 500 DUP (0),'$'							;文件名集合	不超过50个文件	
+	WHICHF1	DB 0										;外层循环记录，便于编程
+	WHICHF2 DB 0										;内层
+	OUTF	DB 'D:\output.txt',0
 DATA ENDS
 
 STACK SEGMENT
@@ -31,6 +41,168 @@ START:	MOV AX, DATA
 		MOV AH, 09H
 		INT 21H 										;显示"欢迎语句"
 			
+			
+;***进入指定目录读取文件的文件名并保存***
+		;设置磁盘缓冲区
+		LEA DX, DTA
+		MOV AH, 1AH
+		INT 21H
+		
+		;进入文件所在的目录
+		LEA DX, DIR
+		MOV AH, 3BH
+		INT 21H
+		JC ERR4											;进入目录失败
+		
+		LEA SI, FILESET									;文件名集合的当前地址
+		MOV CL, 0										;文件个数
+		
+		;得到第一个文件信息
+		LEA DX, FIL
+		MOV AH, 4EH
+		INT 21H
+		JC  ERR5										;读目录失败
+		INC CL											;文件数量加1
+		
+		MOV BX, 1EH
+FIRST:	MOV DL, DTA[BX]
+		CMP DL, 00H
+		JE  REAR
+		;存入文件名集合
+		MOV [SI], DL
+		INC SI
+		INC BX
+		CMP BX, 2AH
+		JBE FIRST
+		
+		;循环获取下一个文件的信息
+REAR:	MOV BYTE PTR[SI], 0										;以空格分隔
+		INC SI
+		LEA DX, FIL
+		MOV AH, 4FH
+		INT 21H
+		JC  REND										;获取文件信息完毕
+		INC CL											;文件数量加1
+		
+		MOV BX, 1EH
+REAR2:	MOV DL, DTA[BX]
+		CMP DL, 00H
+		JE  REAR
+		MOV [SI], DL
+		INC SI
+		INC BX
+		CMP BX, 2AH
+		JBE REAR2
+		JMP REAR
+		
+		;所有文件信息获取完毕,文件数量和文件名确定
+REND:	MOV FILENUM, CL
+		JMP AFTE
+
+;***错误或终止***
+ERR4:	LEA DX, PROMPT4									;显示"打开目录错误"
+		CALL DISP
+		JMP EXIT
+
+				
+ERR5:	LEA DX, PROMPT5									;显示"读目录错误"
+		CALL DISP
+		JMP EXIT
+		
+DONE:	LEA DX, DONE1
+		CALL DISP
+		JMP EXIT
+
+;***每次选择两个文件***
+AFTE:	MOV AL, 0										;文件1的位置
+CHOICE: CMP AL, FILENUM									
+		JAE DONE										;for(i=0;i<n;i++)
+		MOV AH, AL										
+		ADD AH, 1										;文件2的位置在文件1的后面一个
+		
+CHOIE1: CMP AH, FILENUM					
+		JAE CHOIE2
+		JMP CHOVER										;for(j=i+1;j<n;j++)
+						
+CHOIE2: INC AL 			
+		JMP CHOICE
+			
+		;首先把两个文件名清空
+CHOVER:	MOV CX, 20
+		MOV BL, 0
+		LEA SI, FILENAME1
+CLEAR1:	MOV [SI], BL
+		INC SI
+		LOOP CLEAR1
+		
+		MOV CX, 20
+		LEA SI, FILENAME2
+CLEAR2:	MOV [SI], BL
+		INC SI
+		LOOP CLEAR2
+			
+		;先第1个文件的文件名
+		MOV WHICHF1, AL									;先暂存一下文件1和2的文件位置
+		MOV WHICHF2, AH
+		
+		MOV CL, 0										;接下来是第几个文件
+		LEA SI, FILESET
+		
+CMPF:	CMP CL, AL										;看是否为想读的文件
+		JE	YES	
+CMPFF:	MOV BL,[SI]
+		CMP BL, 00H
+		JE  NEXTF										;下一个文件名
+		INC SI 
+		JMP CMPFF
+
+NEXTF:	INC CL
+		INC SI
+		JMP  CMPF
+		
+YES:	LEA DI, FILENAME1								;准备写入文件1的名
+YESS:	MOV BL, [SI]
+		CMP BL, 00H
+		JE  CHOVE2										;第一个写完了
+		MOV [DI], BL
+		INC DI
+		INC SI 
+		JMP YESS
+		
+		;该写第2个文件的文件名
+CHOVE2: MOV CL, 0										;接下来是第几个文件
+		LEA SI, FILESET
+		
+CMPF2:	CMP CL, AH										;看是否为想读的文件
+		JE	YES2
+CMPFF2:	MOV BL, [SI]
+		CMP BL, 00H
+		JE  NEXTF2										;下一个文件名
+		INC SI 
+		JMP CMPFF2
+
+NEXTF2:	INC CL
+		INC SI
+		JMP  CMPF2
+		
+YES2:	LEA DI, FILENAME2								;准备写入文件2的名
+YESS2:	MOV BL, [SI]
+		CMP BL, 00H
+		JE  CFLAG										;两个文件名均写结束
+		MOV [DI], BL
+		INC DI
+		INC SI 
+		JMP YESS2
+
+CFLAG:	MOV AL, 1
+		MOV FLAG, AL									;有两个文件需要读内容
+		
+		MOV AH, 09H
+		LEA DX, FILENAME1
+		INT 21H
+		LEA DX, FILENAME2
+		INT 21H
+		
 		
 ;***选择哪一个文件做操作***
 WHICH:	CMP FLAG, 1
@@ -310,6 +482,18 @@ ANS:	MOV DI, FILE2L
 		;MOV DL, AL
 		;ADD DL, 30H
 		;INT 21H
+		MOV AH, 02H
+		MOV DX, MAXLEN
+		ADD DL, 30H
+		INT 21H
+		
+		MOV DX, TMPLEN
+		ADD DL, 30H
+		INT 21H
+		
+		MOV DL, '!'
+		INT 21H
+		
 
 ;***求百分比***
 PERC:	XOR DX, DX
@@ -351,6 +535,11 @@ HUND:	MOV AH, 02H										;百分之百，特殊处理直接打印100
 
 OVER:	MOV DL, 37										;打印%
 		INT 21H
+		
+		MOV AL, WHICHF1
+		MOV AH, WHICHF2									
+		ADD AH, 1										;内层循环+1
+		JMP CHOIE1
 
 ;***退出***
 EXIT: 	MOV AH, 4CH										;返回DOS
