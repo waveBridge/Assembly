@@ -4,43 +4,61 @@ DATA SEGMENT
 	HANDLE1 DW 0 										;文件1的代号
 	HANDLE2 DW 0										;文件2的代号
 	DTA 	DB 100 DUP (0) 								;磁盘缓冲区
-	FILE1 	DB 8000 DUP ( )                             ;文件1转化为字符串
+	FILE1 	DB 7000 DUP ( )                             ;文件1转化为字符串
 	FILE1L 	DW 0        		      					;文件1字符串长度
-	FILE2 	DB 8000 DUP ( )								;文件2转化为字符串
+	FILE2 	DB 7000 DUP ( )								;文件2转化为字符串
 	FILE2L	DW 0 										;文件2字符串长度
 	PROMPT1 DB 0DH, 0AH, 'Open File Error. $'
 	PROMPT2 DB 0DH, 0AH, 'Read File Error. $'
 	PROMPT3 DB 0DH, 0AH, 'Close File Error. $'
 	PROMPT4 DB 0DH, 0AH, 'Open Dir Error. $'
 	PROMPT5 DB 0DH, 0AH, 'Read Dir Error. $'
+	PROMPT6 DB 0DH, 0AH, 'New File Error. $'
 	WAIT1	DB 0DH, 0AH, 'Please Wait... $'
+	WAIT2   DB 0DH, 0AH, 'Please Input Dir: $'
 	DONE1   DB 0DH, 0AH, 'Finish! $'
 	FLAG	DB 1										;文件读取结束的标记
 	MAXLEN	DW 0										;处理后最长文件的的长度
 	TMPLEN  DW 0 										;文件比较后的长度
-	MATRIX 	DW 24001 DUP (0)                            ;相似度比较使用的矩阵（用到了状态压缩,m+1行压缩为3行）
-	DIR		DB 'D:\CODE', 0								;目录地址
+	MATRIX 	DW 21001 DUP (0)                            ;相似度比较使用的矩阵（用到了状态压缩,m+1行压缩为3行）
+	DIRM	DB 11,0
+	DIR		DB 11 DUP (0), 0,'$'						;目录地址,不超过10个字节
 	FIL     DB '*.asm', 0								;文件匹配
 	FILENUM	DB 0										;文件数量
-	FILESET DB 500 DUP (0),'$'							;文件名集合	不超过50个文件	
+	FILESET DB 300 DUP (0), 0, '$'						;文件名集合 请不要超过10个文件 每个文件名不要超过8个字节
 	WHICHF1	DB 0										;外层循环记录，便于编程
 	WHICHF2 DB 0										;内层
-	OUTF	DB 'D:\output.txt',0
+	ANSSET	DB 110 DUP (0), '$'							;最终结果
+	FANS	DB 150 DUP (0), '$'							;文件的结果
+	ANSSETP	DW 0										;写结果时候的指针
+	OUTFILE	DB 'D:\output.txt',0			
+	OUTHAND DW 0
 DATA ENDS
 
 STACK SEGMENT
 	DB 50 DUP (0)
-STACK ENDs
+STACK ENDS
 
 CODE SEGMENT
 	ASSUME CS: CODE, DS: DATA, SS:STACK
 START:	MOV AX, DATA
 		MOV DS, AX 										;装载DS
 		
+		LEA DX, WAIT2
+		MOV AH, 09H
+		INT 21H 
+		
+		MOV AH, 0AH
+		LEA DX, DIRM
+		INT 21H
+		
+		MOV BL, DIRM+1
+		MOV BH, 0
+		MOV DIR[BX], 0
+		
 		LEA DX, WAIT1
 		MOV AH, 09H
 		INT 21H 										;显示"欢迎语句"
-			
 			
 ;***进入指定目录读取文件的文件名并保存***
 		;设置磁盘缓冲区
@@ -76,7 +94,7 @@ FIRST:	MOV DL, DTA[BX]
 		JBE FIRST
 		
 		;循环获取下一个文件的信息
-REAR:	MOV BYTE PTR[SI], 0										;以空格分隔
+REAR:	MOV BYTE PTR[SI], 0								;以空格分隔
 		INC SI
 		LEA DX, FIL
 		MOV AH, 4FH
@@ -97,6 +115,11 @@ REAR2:	MOV DL, DTA[BX]
 		
 		;所有文件信息获取完毕,文件数量和文件名确定
 REND:	MOV FILENUM, CL
+
+		;MOV AH, 09H
+		;LEA DX, FILESET
+		;INT 21H
+
 		JMP AFTE
 
 ;***错误或终止***
@@ -104,19 +127,102 @@ ERR4:	LEA DX, PROMPT4									;显示"打开目录错误"
 		CALL DISP
 		JMP EXIT
 
-				
 ERR5:	LEA DX, PROMPT5									;显示"读目录错误"
 		CALL DISP
 		JMP EXIT
 		
-DONE:	LEA DX, DONE1
+DONE:	MOV SI, 0										;ANSSET的指针
+		MOV DI, 0										;FANS的指针
+		
+		MOV AL, 0										;当前一行已经写的文件
+		MOV AH, FILENUM				
+		DEC AH											;当前一行应该写的文件
+		
+COPY:	MOV DL, ANSSET[SI]
+		CMP DL, 00H
+		JE  FONE										;当前行完成了一个
+		MOV FANS[DI], DL
+		INC SI
+		INC DI
+		JMP COPY										;不是零，存入FANS,继续扫下一个
+
+ERR6:	LEA DX, PROMPT6									;显示“新建文件出错”
 		CALL DISP
 		JMP EXIT
+		
+FONE:	INC SI
+		MOV FANS[DI], 00H
+		INC DI
+		MOV FANS[DI], 00H
+		INC DI
+		INC AL											;当前行完成数+1
+		
+		CMP AL, AH
+		JB	COPY										;当前行还未完成
+		
+		MOV BL, 0DH
+		MOV FANS[DI], BL
+		INC DI
+		MOV BL, 0AH
+		MOV FANS[DI],BL
+		INC DI
+		
+		;在这里空格
+		MOV BH, FILENUM
+		SUB BH, AH										;应该空多少个4格
+SPACE:	MOV FANS[DI], 00H
+		INC DI
+		MOV FANS[DI], 00H
+		INC DI
+		MOV FANS[DI], 00H
+		INC DI
+		MOV FANS[DI], 00H
+		INC DI
+		MOV FANS[DI], 00H
+		INC DI
+		DEC BH
+		CMP BH, 0
+		JA	SPACE
+		
+		DEC AH											;下一行，该减的减
+		MOV AL, 0		
+		CMP AH, 0
+		JA	COPY
+		JMP NEWF
+
+DONE2:	JMP DONE		
+;***写文件***	
+		;MOV CX, DI
+		;MOV DI, 0
+		;MOV AH, 02H
+;FOOO:	MOV DL, FANS[DI]
+		;INT 21H
+		;INC DI
+		;LOOP FOOO
+		
+		;新建文件
+NEWF:	MOV AH, 3CH 
+		LEA DX, OUTFILE
+		XOR CX, CX										;普通文件
+		INT 21H
+		JC  ERR6
+		MOV BX, AX
+		
+		MOV AH, 40H
+		LEA DX, FANS
+		MOV CX, DI
+		INT 21H
+		
+		LEA DX, DONE1
+		CALL DISP
+	
+		MOV AH, 4CH
+		INT 21H
 
 ;***每次选择两个文件***
 AFTE:	MOV AL, 0										;文件1的位置
 CHOICE: CMP AL, FILENUM									
-		JAE DONE										;for(i=0;i<n;i++)
+		JAE DONE2										;for(i=0;i<n;i++)
 		MOV AH, AL										
 		ADD AH, 1										;文件2的位置在文件1的后面一个
 		
@@ -197,11 +303,11 @@ YESS2:	MOV BL, [SI]
 CFLAG:	MOV AL, 1
 		MOV FLAG, AL									;有两个文件需要读内容
 		
-		MOV AH, 09H
-		LEA DX, FILENAME1
-		INT 21H
-		LEA DX, FILENAME2
-		INT 21H
+		;MOV AH, 09H
+		;LEA DX, FILENAME1
+		;INT 21H
+		;LEA DX, FILENAME2
+		;INT 21H
 		
 		
 ;***选择哪一个文件做操作***
@@ -278,7 +384,7 @@ ERR3: 	LEA DX, PROMPT3
 NOCHAR:	MOV [SI], DL									;放入FILE1内存中
 		INC SI											;SI指针++
 		INC DI											;长度++
-		CMP DI, 8000								
+		CMP DI, 7000								
 		JAE CLOSE
 		;MOV AH, 2
 		;INT 21H
@@ -482,20 +588,9 @@ ANS:	MOV DI, FILE2L
 		;MOV DL, AL
 		;ADD DL, 30H
 		;INT 21H
-		MOV AH, 02H
-		MOV DX, MAXLEN
-		ADD DL, 30H
-		INT 21H
-		
-		MOV DX, TMPLEN
-		ADD DL, 30H
-		INT 21H
-		
-		MOV DL, '!'
-		INT 21H
-		
 
 ;***求百分比***
+		MOV DI, ANSSETP
 PERC:	XOR DX, DX
 		MOV AX, TMPLEN							
 		MOV CX, 100
@@ -512,33 +607,53 @@ PERC:	XOR DX, DX
 		
 		CMP AL, 0	
 		JE	NOTEN
-		PUSH AX
-		MOV AH, 02H
-		MOV DL, AL
-		ADD DL, 30H
-		INT 21H
-		POP AX
+		ADD AL, 30H
+		MOV ANSSET[DI], AL
+		INC DI
+		
+		;PUSH AX
+		;MOV AH, 02H
+		;MOV DL, AL
+		;ADD DL, 30H
+		;INT 21H
+		;POP AX
 
-NOTEN: 	MOV DL, AH										;小于10，只打印个位
-		MOV AH, 02H
-		ADD DL, 30H
-		INT 21H																
+NOTEN: 	ADD AH, 30H
+		MOV ANSSET[DI], AH
+		INC DI
+
+		;MOV DL, AH										;小于10，只打印个位
+		;MOV AH, 02H
+		;ADD DL, 30H
+		;INT 21H																
 		JMP OVER
 											
-HUND:	MOV AH, 02H										;百分之百，特殊处理直接打印100
-		MOV DL, 31H
-		INT 21H
-		MOV DL, 30H
-		INT 21H
-		MOV DL, 30H
-		INT 21H
+HUND:	MOV ANSSET[DI], 31H
+		INC DI
+		MOV ANSSET[DI], 30H
+		INC DI
+		MOV ANSSET[DI], 30H
+		INC DI
 
-OVER:	MOV DL, 37										;打印%
-		INT 21H
+		;MOV AH, 02H									;百分之百，特殊处理直接打印100
+		;MOV DL, 31H
+		;INT 21H
+		;MOV DL, 30H
+		;INT 21H
+		;MOV DL, 30H
+		;INT 21H
+
+OVER:	MOV ANSSET[DI], 37
+		INC DI
+		MOV ANSSET[DI], 00H
+		INC DI
+		MOV ANSSETP, DI
+		;MOV DL, 37										;打印%
+		;INT 21H
 		
 		MOV AL, WHICHF1
-		MOV AH, WHICHF2									
-		ADD AH, 1										;内层循环+1
+		MOV AH, WHICHF2
+		INC AH
 		JMP CHOIE1
 
 ;***退出***
